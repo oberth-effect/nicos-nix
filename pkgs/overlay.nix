@@ -52,7 +52,10 @@ in
     inherit version;
   };
 
-  nicosLib = final.callPackage ../nix/lib.nix {
+  # The pkgs-bound builders (mkSetupPackage, mkNicos, checkSetups, ...). The
+  # pure helpers live in lib/ and are exposed as flake.lib instead, since they
+  # need no package set.
+  nicosLib = final.callPackage ../nix/builders.nix {
     python = final.nicosPython;
   };
 

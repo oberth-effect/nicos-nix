@@ -237,9 +237,9 @@ deliberately *not* source patches, so they apply equally to a mutable checkout:
 ```
 flake.nix                 flake-parts; inputs nixpkgs + nicos-src (flake = false)
 nix/python.nix            the python313 pin (NICOS supports <= 3.13; nixpkgs is on 3.14)
-nix/lib.nix               mkSetupPackage, mkNicosRoot, mkNicosEnv, mkNicos, checkSetups
+nix/builders.nix          pkgs-bound: mkSetupPackage, mkNicos, checkSetups, ...
 nix/nicos_nix_fixes.py    the two environment-level fixes
-lib/services.nix          pure helpers: unitNameFor, splitServiceName, ...
+lib/services.nix          pure (no pkgs): unitNameFor, splitServiceName, ... -> flake.lib
 lib/gui.nix               the option set + package shared by both GUI modules
 pkgs/nicos/               nicos-unwrapped + the dependency table
 pkgs/setup-packages.nix   the setup packages vendored in the NICOS repo

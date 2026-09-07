@@ -1,9 +1,18 @@
-# The composition layer.
+# The builders: everything that produces a derivation.
 #
-# mkSetupPackage  a nicos_<facility> directory -> a derivation
-# mkNicosRoot     core + setup packages + nicos.conf -> a valid NICOS root
-# mkNicosEnv      a root path -> the user-facing bin/nicos-* wrappers
-# mkNicos         all of the above, wired together
+#   mkSetupPackage  a nicos_<facility> directory -> a derivation
+#   mkNicosRoot     core + setup packages + nicos.conf -> a valid NICOS root
+#   mkNicosEnv      a root path -> the user-facing bin/nicos-* wrappers
+#   mkNicos         all of the above, wired together
+#   checkSetups     validate a composed root's setups at build time
+#
+# Everything here is pkgs-bound: it needs a package set to build anything. That
+# is what separates it from `lib/`, which holds the pure helpers that need
+# nothing but `lib` and are therefore exposed as the system-independent
+# `flake.lib`.
+#
+# Reached as `pkgs.nicosLib` -- the attribute keeps that name deliberately,
+# even though the file is named for its contents.
 {
   lib,
   stdenvNoCC,
@@ -277,7 +286,7 @@ rec {
         expected=$(for b in ${lib.escapeShellArgs nicosBinNames}; do echo "$b"; done | sort)
         actual=$(cd "$out/bin" && ls | sort)
         if [ "$expected" != "$actual" ]; then
-          echo "nicos-nix: bin/ does not match nix/lib.nix's nicosBinNames." >&2
+          echo "nicos-nix: bin/ does not match nix/builders.nix's nicosBinNames." >&2
           echo "  only in nicosBinNames:" >&2
           comm -23 <(echo "$expected") <(echo "$actual") | sed 's/^/    /' >&2
           echo "  only in the source tree:" >&2
