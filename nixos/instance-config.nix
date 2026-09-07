@@ -106,7 +106,14 @@ let
   }
   // cfg.environment;
 
-  nicos = pkgs.nicosLib.mkNicos {
+  # The special setups the `services` list implies. A bare name loads
+  # setups/special/<proc>.py; a `<proc>-<inst>` name loads
+  # setups/special/<proc>-<inst>.py.
+  impliedSetups = lib.unique (
+    lib.mapAttrsToList (sname: s: if s.setup != null then s.setup else s.procName) enabledServices
+  );
+
+  nicosUnchecked = pkgs.nicosLib.mkNicos {
     nicos = cfg.package;
     inherit (cfg) setupPackages;
     inherit (cfg) extras extraPythonPackages extraWrapperEnv;
@@ -181,6 +188,9 @@ let
           )
           ++ optional mutable "-${toString cfg.root.path}";
       }
+      // optionalAttrs (mutable && cfg.checkSetups != false) {
+        ExecStartPre = "${mutableSetupCheckScript} ${if s.setup != null then s.setup else s.procName}";
+      }
       // props;
 
       # `git` is on PATH for mutable roots: a checkout has real git metadata
@@ -203,6 +213,47 @@ let
         }
       ) dirs
     );
+  setupCheck =
+    if cfg.checkSetups == false || mutable then
+      null
+    else
+      pkgs.nicosLib.checkSetups {
+        nicos = nicosUnchecked;
+        setupNames = impliedSetups;
+        level = cfg.checkSetups;
+      };
+
+  # In mutable mode the check cannot be a derivation -- the path does not exist
+  # at evaluation time -- so it runs before each start. A store script, not an
+  # inline ExecStartPre: systemd will not parse a multi-line command value.
+  mutableSetupCheckScript = pkgs.writeShellScript "nicos-check-setup-exists" ''
+    set -eu
+    ${nicosUnchecked}/bin/nicos-python ${./check-setup-exists.py} "$1"
+  '';
+
+  # Make the package the services reference depend on the check, so a broken
+  # setup fails the build rather than the instrument. A symlink keeps the
+  # runtime closure identical.
+  # `nicos` is what the units, systemPackages and finalPackage all reference,
+  # so making it depend on the check is what actually gates the build. The
+  # symlink keeps the runtime closure identical to nicosUnchecked.
+  nicos =
+    if setupCheck == null then
+      nicosUnchecked
+    else
+      pkgs.runCommand "${nicosUnchecked.name}-checked"
+        {
+          # a build input, so it has to succeed before this exists
+          nativeBuildInputs = [ setupCheck ];
+          passthru = nicosUnchecked.passthru // {
+            inherit setupCheck;
+            unchecked = nicosUnchecked;
+          };
+          inherit (nicosUnchecked) meta;
+        }
+        ''
+          ln -s ${nicosUnchecked} $out
+        '';
 in
 {
   services.nicos.finalPackage = nicos;

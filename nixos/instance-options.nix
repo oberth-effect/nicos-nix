@@ -501,6 +501,42 @@ in
     '';
   };
 
+  checkSetups = mkOption {
+    type = types.enum [
+      false
+      "names"
+      "full"
+    ];
+    default = "names";
+    example = "full";
+    description = ''
+      Validate this instance's setups at build time, so a mistake fails
+      `nixos-rebuild` instead of the instrument.
+
+      `"names"` (the default) asserts that every special setup implied by
+      {option}`services.nicos.services` exists. This is cheap and adds nothing
+      to the closure. It catches the failure that motivates the whole feature:
+      a typo such as `"collector-ppms-9"` produces a unit that starts, fails to
+      find its setup, exits non-zero and -- with `Restart=on-abnormal` -- does
+      *not* restart, leaving a silently dead collector.
+
+      `"full"` additionally runs upstream's {command}`tools/check-setups`,
+      validating device classes, parameters and {file}`guiconfig.py` files.
+      Note the cost: `nicostools/setupchecker` imports
+      `nicos.clients.gui.config`, which imports `nicos.guisupport.qt`, so this
+      needs a Qt binding and pulls Qt and GR into the *build* closure even on a
+      headless instrument. It also imports your device classes, so
+      {option}`services.nicos.extraPythonPackages` must be complete or it will
+      fail on missing optional dependencies.
+
+      In `mutable` root mode the check cannot run in a derivation -- the path
+      does not exist at evaluation time -- so it becomes an `ExecStartPre`
+      instead.
+
+      `false` disables it.
+    '';
+  };
+
   installTools = mkOption {
     type = types.bool;
     default = true;

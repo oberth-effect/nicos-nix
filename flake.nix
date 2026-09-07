@@ -4,6 +4,12 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-parts.url = "github:hercules-ci/flake-parts";
+    # Only so that `checks.hm-gui` can type-check home/default.nix. Nothing in
+    # packages/ or nixosModules/ depends on it.
+    home-manager = {
+      url = "github:nix-community/home-manager";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
     nicos-src = {
       url = "github:mlz-ictrl/nicos";
       flake = false;
@@ -16,6 +22,7 @@
       flake-parts,
       nixpkgs,
       nicos-src,
+      home-manager,
       ...
     }:
     flake-parts.lib.mkFlake { inherit inputs; } {
@@ -38,8 +45,14 @@
         homeManagerModules.nicos-gui = ./home;
         homeManagerModules.default = self.homeManagerModules.nicos-gui;
 
-        # Pure helpers: knownProcNames, splitServiceName, unitNameFor, ...
-        lib = import ./lib/services.nix { inherit (nixpkgs) lib; };
+        lib = import ./lib/services.nix { inherit (nixpkgs) lib; } // {
+          # Build the nicos-nix Python package set on an interpreter other than
+          # the pinned python313, e.g. to try a newer one:
+          #   nicos-nix.lib.nicosFor pkgs pkgs.python314
+          # The 3.9 lower bound stays a hard error (NICOS enforces it itself);
+          # going above 3.13 only warns.
+          nicosFor = pkgs: basePython: import ./nix/python.nix { inherit pkgs basePython; };
+        };
       };
 
       perSystem =
@@ -98,6 +111,11 @@
             gui-offscreen = pkgs.callPackage ./checks/gui-offscreen.nix { };
 
             vm-demo = pkgs.callPackage ./tests/demo.nix { inherit self; };
+
+            # home/default.nix would otherwise never be type-checked.
+            hm-gui = pkgs.callPackage ./tests/hm-gui.nix {
+              inherit self home-manager;
+            };
           };
 
           devShells.default = pkgs.mkShell {

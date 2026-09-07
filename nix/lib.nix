@@ -405,6 +405,90 @@ rec {
       // lib.optionalAttrs (mainProgram != null) { inherit mainProgram; };
     };
 
+  ## ------------------------------------------------------------------ ##
+  ## Setup validation                                                   ##
+  ## ------------------------------------------------------------------ ##
+
+  # Validate a composed root's setups at build time, so a mistake fails
+  # `nixos-rebuild` instead of the instrument.
+  #
+  # Two levels, because they cost wildly different amounts:
+  #
+  #  "names" -- assert that every special setup implied by the `services` list
+  #     exists. Cheap, no extra closure. This catches the failure the whole
+  #     idea was for: a typo'd `-S` name (`collector-ppms-9`) yields a unit
+  #     that starts, fails to find its setup, exits non-zero, and -- with
+  #     Restart=on-abnormal -- does *not* restart. A silently dead collector.
+  #
+  #  "full" -- additionally run upstream's tools/check-setups, which validates
+  #     device classes, parameters and guiconfig files. Note the cost:
+  #     nicostools/setupchecker imports nicos.clients.gui.config, which imports
+  #     nicos.guisupport.qt, so this needs a Qt binding and pulls Qt and GR
+  #     into the *build* closure even for a headless instrument. That is why it
+  #     is not the default.
+  checkSetups =
+    {
+      # the package whose root is being validated
+      nicos,
+      # special setup names implied by the services list, e.g. [ "monitor-html" ]
+      setupNames ? [ ],
+      level ? "names",
+      extraArgs ? [ ],
+    }:
+    let
+      # For "full" we need an interpreter that can import Qt. Built here rather
+      # than reusing the runtime env, so the Qt closure stays a build-time
+      # dependency of the check and never reaches the service.
+      guiEnv = mkPythonEnv {
+        nicos = nicos.passthru.nicosUnwrapped or nicos-unwrapped;
+        setupPackages = nicos.passthru.setupPackages or [ ];
+        extras = [ "gui" ];
+      };
+      guiShim = mkPythonShim guiEnv;
+    in
+    runCommand "nicos-check-setups"
+      {
+        passthru = { inherit level setupNames; };
+      }
+      (
+        ''
+          export HOME="$TMPDIR"
+          root=${nicos.passthru.root}
+
+          # Ask NICOS itself where the setups live, rather than reimplementing
+          # findSetupRoots: setup_subdirs, the instrument's own nicos.conf and
+          # the setup_package import all have to agree.
+          dirs=$(${nicos}/bin/nicos-python -c "
+          import os
+          from nicos import config
+          print(' '.join(os.path.join(config.setup_package_path, s, 'setups')
+                         for s in config.setup_subdirs))")
+          echo "nicos-nix: setup roots: $dirs"
+
+          for want in ${lib.escapeShellArgs setupNames}; do
+            found=
+            for d in $dirs; do
+              if [ -f "$d/special/$want.py" ] || [ -f "$d/$want.py" ]; then found=1; break; fi
+            done
+            if [ -z "$found" ]; then
+              echo "nicos-nix: services requires the special setup '$want', but" >&2
+              echo "  no '$want.py' exists under any of:" >&2
+              for d in $dirs; do echo "    $d/special/" >&2; done
+              echo "  A service named '<proc>-<name>' loads setups/special/<proc>-<name>.py." >&2
+              exit 1
+            fi
+            echo "nicos-nix: ok, special setup '$want' exists"
+          done
+        ''
+        + lib.optionalString (level == "full") ''
+          echo "nicos-nix: running upstream tools/check-setups"
+          ${guiShim}/bin/python3 "$root/tools/check-setups"           ${lib.escapeShellArgs extraArgs} $dirs
+        ''
+        + ''
+          touch $out
+        ''
+      );
+
   mkNicos =
     {
       pname ? "nicos",
@@ -485,6 +569,8 @@ rec {
           (old: {
             passthru = (old.passthru or { }) // {
               inherit pythonEnv pythonShim setupPackages;
+              # so checkSetups can build a Qt-capable env from the same source
+              nicosUnwrapped = nicos;
               root = if mutableMode then toString rootPath else storeRoot;
               nicosConf = mkNicosConf {
                 inherit settings;

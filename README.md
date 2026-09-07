@@ -128,6 +128,45 @@ Three details make that work, and all three are load-bearing:
   `<root>/bin/nicos-{poller,simulate,script}` as `[sys.executable, script]` --
   Python *reads* those files, so a shell wrapper there would be a `SyntaxError`.
 
+## Catching setup mistakes at build time
+
+```nix
+services.nicos.checkSetups = "names";   # the default
+```
+
+A NICOS service named `<proc>-<name>` loads `setups/special/<proc>-<name>.py`.
+Get that name wrong -- `collector-ppms-9` for `collector-ppms9` -- and you get a
+unit that starts, fails to find its setup, exits non-zero, and with
+`Restart=on-abnormal` does *not* restart. A silently dead collector.
+
+`"names"` asserts at build time that every special setup your `services` list
+implies actually exists, so that becomes a `nixos-rebuild` failure. It costs
+nothing and is on by default.
+
+`"full"` additionally runs upstream's `tools/check-setups`, validating device
+classes, parameters and `guiconfig.py` files. It is **not** the default because
+of what it drags in: `nicostools/setupchecker` imports
+`nicos.clients.gui.config`, which imports `nicos.guisupport.qt`, so the full
+checker needs a Qt binding and pulls Qt and GR into the *build* closure even on
+a headless instrument. It also imports your device classes, so
+`extraPythonPackages` has to be complete or it fails on missing optional
+dependencies.
+
+In `mutable` root mode the check cannot be a derivation -- the path does not
+exist at evaluation time -- so it becomes an `ExecStartPre` instead.
+
+## Using a different interpreter
+
+The pin is `python313`, because NICOS advertises 3.9-3.13 while nixpkgs' `python3`
+is already 3.14. To try another one:
+
+```nix
+(nicos-nix.lib.nicosFor pkgs pkgs.python314).pkgs.nicos-pyctl
+```
+
+The 3.9 lower bound stays a hard error, since `nicos/__init__.py` enforces it
+itself; going above 3.13 only warns.
+
 ## Relative paths in setups
 
 NICOS resolves `FlatfileCacheDatabase.storepath`, `Exp.dataroot` and friends
@@ -198,9 +237,10 @@ deliberately *not* source patches, so they apply equally to a mutable checkout:
 ```
 flake.nix                 flake-parts; inputs nixpkgs + nicos-src (flake = false)
 nix/python.nix            the python313 pin (NICOS supports <= 3.13; nixpkgs is on 3.14)
-nix/lib.nix               mkSetupPackage, mkNicosRoot, mkNicosEnv, mkNicos
+nix/lib.nix               mkSetupPackage, mkNicosRoot, mkNicosEnv, mkNicos, checkSetups
 nix/nicos_nix_fixes.py    the two environment-level fixes
 lib/services.nix          pure helpers: unitNameFor, splitServiceName, ...
+lib/gui.nix               the option set + package shared by both GUI modules
 pkgs/nicos/               nicos-unwrapped + the dependency table
 pkgs/setup-packages.nix   the setup packages vendored in the NICOS repo
 pkgs/python/              lttb, nicos-pyctl, gr, mlzlog, frappy-core
@@ -209,6 +249,7 @@ pkgs/gr-framework/        the GR plotting runtime, built from source
 nixos/                    services.nicos and programs.nicos-gui
 home/                     programs.nicos-gui for Home Manager
 tests/{eval,demo}.nix     eval-only unit assertions; the end-to-end VM test
+tests/hm-gui.nix          type-checks the Home Manager module
 examples/mgml.nix         a real instrument configuration
 ```
 
@@ -219,6 +260,7 @@ nix flake check
 nix build .#checks.x86_64-linux.eval           # unit-generation rules, seconds, no VM
 nix build .#checks.x86_64-linux.import-sweep   # every core module imports
 nix build .#checks.x86_64-linux.gui-offscreen  # GR, QtDesigner stub, WebEngine, QScintilla
+nix build .#checks.x86_64-linux.hm-gui         # the Home Manager module type-checks
 nix build .#checks.x86_64-linux.vm-demo        # services under systemd, end to end
 ```
 

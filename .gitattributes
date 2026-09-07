@@ -1,0 +1,7 @@
+# core.autocrlf=true on a Windows checkout would give the working tree CRLF,
+# and CRLF inside a Nix '' string ends up in the shell fragments it generates:
+# `bash: $'\r': command not found` at build time. A Nix repo must be LF.
+* text=auto eol=lf
+*.png binary
+*.pfb binary
+*.afm binary
