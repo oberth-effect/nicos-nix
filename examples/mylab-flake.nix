@@ -22,7 +22,7 @@
   description = "nicos_mylab: NICOS setups and device classes for MyLab";
 
   inputs = {
-    nicos-nix.url = "github:<you>/nicos-nix";
+    nicos-nix.url = "github:oberth-effect/nicos-nix";
     # One nixpkgs for everything: the NICOS interpreter and this package must
     # agree, and the host should not carry two package sets.
     nixpkgs.follows = "nicos-nix/nixpkgs";

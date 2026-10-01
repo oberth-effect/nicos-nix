@@ -6,7 +6,7 @@ for the services, and a Qt client.
 
 ```nix
 {
-  inputs.nicos-nix.url = "github:<you>/nicos-nix";
+  inputs.nicos-nix.url = "github:oberth-effect/nicos-nix";
 
   # your instrument's setup package, from wherever it lives
   inputs.nicos-mylab = {
@@ -79,7 +79,7 @@ services.nicos.services = lib.mkMerge [
 ## Running the GUI
 
 ```sh
-nix run github:<you>/nicos-nix#nicos-gui          # or just `nix run <flake>`
+nix run github:oberth-effect/nicos-nix#nicos-gui          # or just `nix run <flake>`
 ```
 
 With no arguments it opens the instrument chooser, which globs every
