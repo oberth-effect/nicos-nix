@@ -4,6 +4,9 @@
 system, packaged for Nix and NixOS: the core, its setup packages, a NixOS module
 for the services, and a Qt client.
 
+Documentation, including the generated option reference:
+<https://oberth-effect.github.io/nicos-nix/>
+
 ```nix
 {
   inputs.nicos-nix.url = "github:oberth-effect/nicos-nix";
@@ -358,6 +361,7 @@ tests/{eval,demo}.nix     eval-only unit assertions; the end-to-end VM test
 tests/hm-gui.nix          type-checks the Home Manager module
 examples/mgml.nix         a real instrument configuration
 examples/mylab-flake.nix  a flake.nix for a repository that is itself a setup package
+docs/                     the mdBook site: this README as chapters + the option reference
 ```
 
 ## Checks

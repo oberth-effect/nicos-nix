@@ -68,6 +68,10 @@
             inherit system;
             overlays = [ self.overlays.default ];
           };
+          # The mdBook site: README chapters plus the generated option
+          # reference. Also a check, so a broken option description fails
+          # `nix flake check` instead of the Pages deploy.
+          docs = pkgs.callPackage ./docs { inherit self nixpkgs; };
         in
         {
           # flake-parts' own `pkgs` for this system, with our overlay applied.
@@ -88,6 +92,8 @@
             gr = pkgs.nicosPython.pkgs.gr;
             mlzlog = pkgs.nicosPython.pkgs.mlzlog;
             frappy-core = pkgs.nicosPython.pkgs.frappy-core;
+
+            inherit docs;
           };
 
           apps =
@@ -133,6 +139,8 @@
             hm-gui = pkgs.callPackage ./tests/hm-gui.nix {
               inherit self home-manager;
             };
+
+            inherit docs;
           };
 
           devShells.default = pkgs.mkShell {

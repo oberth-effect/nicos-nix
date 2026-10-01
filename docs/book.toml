@@ -1,0 +1,14 @@
+[book]
+title = "nicos-nix"
+description = "NICOS, the MLZ networked instrument control system, packaged for Nix and NixOS"
+language = "en"
+src = "src"
+
+[output.html]
+git-repository-url = "https://github.com/oberth-effect/nicos-nix"
+site-url = "/nicos-nix/"
+default-theme = "light"
+preferred-dark-theme = "ayu"
+
+[output.html.search]
+limit-results = 20
