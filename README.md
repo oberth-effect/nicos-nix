@@ -16,6 +16,35 @@ for the services, and a Qt client.
 }
 ```
 
+Then import the module. Everything here (`pkgs.nicosLib`,
+`pkgs.nicosSetupPackages`, both `programs.nicos-gui` modules) lives behind the
+overlay; `nixosModules.default` applies it for you:
+
+```nix
+nixosConfigurations.nicosbox = nixpkgs.lib.nixosSystem {
+  modules = [ nicos-nix.nixosModules.default ./instrument.nix ];
+  specialArgs = { inherit inputs; };   # so instrument.nix can see inputs.nicos-mylab
+};
+```
+
+- `nixosModules.default` -- `services.nicos` and `programs.nicos-gui`, overlay
+  included.
+- `nixosModules.nicos` -- the same without touching `nixpkgs.overlays`, for
+  configurations that set `nixpkgs.pkgs` themselves. Put `overlays.default`
+  on that package set.
+- `homeManagerModules.default` -- `programs.nicos-gui` for Home Manager. It
+  never touches overlays, so add `nicos-nix.overlays.default` to
+  `nixpkgs.overlays` in your Home Manager configuration (or to the `pkgs` you
+  hand to `homeManagerConfiguration`).
+
+A missing overlay is reported as such, not as a bare "attribute missing".
+
+If the setup package repository should carry its own flake instead -- exposing
+the package, a GUI, a setup check and the instrument host -- start from
+`examples/mylab-flake.nix`.
+
+An instrument, in `instrument.nix`:
+
 ```nix
 services.nicos = {
   enable = true;
@@ -82,7 +111,7 @@ or declaratively on a workstation, which also generates a desktop entry per
 instrument:
 
 ```nix
-# NixOS
+# NixOS or Home Manager: the same option set
 programs.nicos-gui = {
   enable = true;
   setupPackages = with pkgs.nicosSetupPackages; [ mgml demo ];
@@ -90,8 +119,8 @@ programs.nicos-gui = {
   instrument = "twenty";
 };
 
-# Home Manager -- additionally gives you `servers`, one desktop entry each
-programs.nicos-gui.servers."20t" = { host = "nicosbox.mgml.eu"; };
+# either module turns `servers` into one desktop entry per daemon
+programs.nicos-gui.servers."twenty" = { host = "nicosbox.mgml.eu"; };
 ```
 
 Note that the *headless* `.#nicos` package deliberately does **not** ship
@@ -153,7 +182,8 @@ a headless instrument. It also imports your device classes, so
 dependencies.
 
 In `mutable` root mode the check cannot be a derivation -- the path does not
-exist at evaluation time -- so it becomes an `ExecStartPre` instead.
+exist at evaluation time -- so the `"names"` check becomes an `ExecStartPre`
+instead. `"full"` is downgraded to that there, with a warning.
 
 ## Using a different interpreter
 
@@ -164,8 +194,76 @@ is already 3.14. To try another one:
 (nicos-nix.lib.nicosFor pkgs pkgs.python314).pkgs.nicos-pyctl
 ```
 
+To run NICOS itself on it, replace the `nicosPython` the overlay defines, in an
+overlay placed after `nicos-nix.overlays.default`. Everything downstream
+(`nicos-unwrapped`, `nicosLib`, the modules) reads `final.nicosPython`:
+
+```nix
+nixpkgs.overlays = [
+  nicos-nix.overlays.default
+  (final: _: { nicosPython = nicos-nix.lib.nicosFor final final.python314; })
+];
+```
+
 The 3.9 lower bound stays a hard error, since `nicos/__init__.py` enforces it
 itself; going above 3.13 only warns.
+
+## Pinning NICOS
+
+nicos-nix pins one NICOS as a known-good default that its checks run against:
+the `nicos-src` input, at the `v3.12.2` tag. Deployments usually want their
+own, and there are two places to say so.
+
+**Per flake.** Repoint the input. A tag, a release branch such as
+`release-3.13`, or a full commit hash all work; the lock file records the
+resolved commit either way:
+
+```nix
+inputs.nicos-nix.inputs.nicos-src.url = "github:mlz-ictrl/nicos/v3.13.2";
+```
+
+A flake input never carries the tag it was reached through, so also tell the
+overlay what you pinned, or the version label (and `nicos/RELEASE-VERSION`)
+stays at the default:
+
+```nix
+nixpkgs.overlays = [
+  nicos-nix.overlays.default
+  (final: prev: { nicosVersion = "3.13.2"; })
+];
+```
+
+**Per host, inside one flake.** A flake that deploys several instruments has
+only one `nicos-src`, but every NixOS host evaluates its own package set, so a
+host-local overlay can swap the source. Everything derived from it -- the core,
+the vendored setup packages, the GUI -- follows, which `services.nicos.package`
+alone cannot guarantee:
+
+```nix
+inputs.nicos-3-13 = { url = "github:mlz-ictrl/nicos/v3.13.2"; flake = false; };
+
+# in that host's configuration
+nixpkgs.overlays = [
+  nicos-nix.overlays.default
+  (final: prev: {
+    nicosSource = inputs.nicos-3-13;
+    nicosVersion = "3.13.2";
+  })
+];
+```
+
+Two things to expect when leaving the default. The dependency table in
+`pkgs/nicos/dependencies.nix` follows the pinned tree where versions are known
+to differ (the TOML reader changed after 3.12), but it was transcribed from a
+handful of revisions, so a distant version may still need it adjusted; the
+`unknown extras` error and the `import-sweep` check are what tell you. And
+nicos-nix's checks only vouch for its own pin, so run `nix flake check` on your
+deployment -- the example flake in `examples/mylab-flake.nix` sets that up.
+The vendored `pkgs.nicosSetupPackages` are discovered from the pinned tree, so
+they always match it.
+
+`services.nicos.package` remains for one-off experiments with the core alone,
+and a `mutable` root runs whatever is in the checkout regardless of any pin.
 
 ## Relative paths in setups
 
@@ -211,7 +309,7 @@ services.nicos.mutableSetupPackages = [ "/srv/nicos-setups" ];
 
 ## What this flake patches, and why
 
-One source patch and two environment-level fixes. The environment ones are
+Two source patches and two environment-level fixes. The environment ones are
 deliberately *not* source patches, so they apply equally to a mutable checkout:
 
 - **`ctypes.util.find_library` cannot work on NixOS** -- no `ldconfig` cache, no
@@ -228,19 +326,26 @@ deliberately *not* source patches, so they apply equally to a mutable checkout:
   an empty stub module is supplied.
 - **The version is frozen at build time.** `gitversion.get_nicos_version()`
   shells out to `git describe` before falling back to `RELEASE-VERSION`, costing
-  a failed fork on every `import nicos`. Not applied to mutable roots, which
-  have real git metadata -- there, `git` is put on the unit's `PATH` instead,
+  a failed fork on every `import nicos`. A mutable root seeded from
+  `nicos-unwrapped` carries the frozen copy; a `git clone` keeps upstream's and
+  has real git metadata -- there, `git` is put on the unit's `PATH` instead,
   because with neither git nor `RELEASE-VERSION` `import nicos` raises outright.
+- **NICOS 3.12 and older use `numpy.mat`**, which NumPy 2 -- what nixpkgs
+  ships -- removed, so the TAS plotting and commands modules fail to import.
+  `nicos/devices/tas/plotting.py` is switched to `asmatrix`, upstream's own
+  later fix, whenever the pinned tree still has the old spelling. A mutable
+  checkout of such a version needs the same one-line edit.
 
 ## Layout
 
 ```
-flake.nix                 flake-parts; inputs nixpkgs + nicos-src (flake = false)
+flake.nix                 flake-parts; inputs nixpkgs + nicos-src (flake = false, at a release tag)
 nix/python.nix            the python313 pin (NICOS supports <= 3.13; nixpkgs is on 3.14)
 nix/builders.nix          pkgs-bound: mkSetupPackage, mkNicos, checkSetups, ...
 nix/nicos_nix_fixes.py    the two environment-level fixes
 lib/services.nix          pure (no pkgs): unitNameFor, splitServiceName, ... -> flake.lib
 lib/gui.nix               the option set + package shared by both GUI modules
+lib/from-overlay.nix      pkgs.<attr>, or a message saying the overlay is missing
 pkgs/nicos/               nicos-unwrapped + the dependency table
 pkgs/setup-packages.nix   the setup packages vendored in the NICOS repo
 pkgs/python/              lttb, nicos-pyctl, gr, mlzlog, frappy-core
@@ -248,9 +353,11 @@ pkgs/python/              lttb, nicos-pyctl, gr, mlzlog, frappy-core
 pkgs/gr-framework/        the GR plotting runtime, built from source
 nixos/                    services.nicos and programs.nicos-gui
 home/                     programs.nicos-gui for Home Manager
+checks/                   build-time checks that are not NixOS tests
 tests/{eval,demo}.nix     eval-only unit assertions; the end-to-end VM test
 tests/hm-gui.nix          type-checks the Home Manager module
 examples/mgml.nix         a real instrument configuration
+examples/mylab-flake.nix  a flake.nix for a repository that is itself a setup package
 ```
 
 ## Checks
@@ -258,7 +365,10 @@ examples/mgml.nix         a real instrument configuration
 ```
 nix flake check
 nix build .#checks.x86_64-linux.eval           # unit-generation rules, seconds, no VM
+nix build .#checks.x86_64-linux.python-imports # lttb and nicos-pyctl work on the pinned interpreter
 nix build .#checks.x86_64-linux.import-sweep   # every core module imports
+nix build .#checks.x86_64-linux.setup-packages # every vendored setup package builds
+nix build .#checks.x86_64-linux.mutable-root   # root.mode = "mutable" resolves outside the store
 nix build .#checks.x86_64-linux.gui-offscreen  # GR, QtDesigner stub, WebEngine, QScintilla
 nix build .#checks.x86_64-linux.hm-gui         # the Home Manager module type-checks
 nix build .#checks.x86_64-linux.vm-demo        # services under systemd, end to end
@@ -278,5 +388,5 @@ The `secop` extra works too: `frappy-core` and its missing dependency `mlzlog`
 are packaged here, and `nicos.devices.secop` imports against them.
 
 EPICS (`pyepics`/`caproto`/`p4p` plus EPICS base) is deferred: nixpkgs has none
-of it, and it would roughly double the C-packaging work. `extras.epics` is not
+of it, and it would roughly double the C-packaging work. No `epics` extra is
 declared, so asking for it is an error rather than a silent no-op.

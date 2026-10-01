@@ -62,10 +62,20 @@ if _LIB_DIRS:
 
         import glob
 
+        def soname_key(path):
+            # libfoo.so.10 sorts after libfoo.so.9, which plain string order
+            # gets wrong.
+            tail = path.rpartition(".so")[2]
+            return [
+                (0, int(part)) if part.isdigit() else (1, part)
+                for part in tail.split(".")
+                if part
+            ]
+
         # Unversioned first (a dev output), then the highest versioned soname.
         for pattern in ("lib%s.so" % name, "lib%s.so.*" % name, "%s.so" % name):
             for directory in _LIB_DIRS:
-                hits = sorted(glob.glob(os.path.join(directory, pattern)))
+                hits = sorted(glob.glob(os.path.join(directory, pattern)), key=soname_key)
                 if hits:
                     return hits[-1]
         return None

@@ -13,6 +13,7 @@ let
     literalMD
     ;
   nlib = import ../lib/services.nix { inherit lib; };
+  fromOverlay = import ../lib/from-overlay.nix;
   tomlFormat = pkgs.formats.toml { };
 
   serviceType = types.submodule (
@@ -149,7 +150,7 @@ in
 
   package = mkOption {
     type = types.package;
-    default = pkgs.nicos-unwrapped;
+    default = fromOverlay pkgs "nicos-unwrapped";
     defaultText = literalExpression "pkgs.nicos-unwrapped";
     description = ''
       The bare NICOS source tree. Override to pin a different NICOS revision,
@@ -185,11 +186,16 @@ in
   setupPackage = mkOption {
     type = types.nullOr types.str;
     default = null;
-    defaultText = literalMD "the single entry of {option}`services.nicos.setupPackages`, if there is exactly one";
+    defaultText = literalMD "`null`: use the single entry of {option}`services.nicos.setupPackages`, if there is exactly one";
     example = "nicos_mylab";
     description = ''
       `setup_package`: the Python package name (`nicos_mylab`, not `mylab`)
       whose setups this instance uses.
+
+      `null` selects the only entry of {option}`services.nicos.setupPackages`
+      when there is exactly one, and is an error otherwise once any service is
+      enabled. (This differs from `programs.nicos-gui.setupPackage`, where
+      `null` means the instrument chooser.)
     '';
   };
 
@@ -322,8 +328,9 @@ in
       example = literalExpression "pkgs.nicos-unwrapped";
       description = ''
         In `mutable` mode, populate {option}`services.nicos.root.path` from
-        this package once, if the directory is empty, and never touch it again.
-        `null` means the directory is entirely yours (a `git clone`).
+        this package once, if it does not yet contain
+        {file}`nicos/configmod.py`, and never touch it again. `null` means the
+        directory is entirely yours (a `git clone`).
       '';
     };
   };
@@ -377,9 +384,9 @@ in
       `logging_path`; logs land in
       {file}`<logDir>/<service>/<service>-YYYY-MM-DD.log`.
 
-      Always written to {file}`nicos.conf`, and required to be absolute: NICOS
-      resolves a relative value against `nicos_root`, which in `store` mode is
-      read-only.
+      Always written to {file}`nicos.conf`, and must be absolute (the type
+      enforces it): NICOS resolves a relative value against `nicos_root`,
+      which in `store` mode is read-only.
     '';
   };
 
@@ -435,8 +442,12 @@ in
     description = ''
       `keystorepaths`. Upstream's default also contains
       {file}`~/.config/nicos/keystore`, dropped here because a system service
-      should not depend on a per-user path. Populate with
-      `''${config.services.nicos.finalPackage}/bin/nicos-keystore`.
+      should not depend on a per-user path.
+
+      Each directory is created by this module, owned by
+      {option}`services.nicos.user` with mode `0750`, so that
+      `''${config.services.nicos.finalPackage}/bin/nicos-keystore add ...`
+      run as that user can write its keyring file.
     '';
   };
 
@@ -454,6 +465,9 @@ in
       Because NICOS applies them at config load, they cannot influence the
       dynamic loader -- put `LD_LIBRARY_PATH` and friends in
       {option}`services.nicos.extraWrapperEnv` instead.
+
+      A `PYTHONPATH` here is appended after
+      {option}`services.nicos.mutableSetupPackages`, never in place of it.
     '';
   };
 
@@ -476,10 +490,11 @@ in
       Free-form extra keys for the `[nicos]` section of {file}`nicos.conf`.
       NICOS `setattr`s every key it finds, so arbitrary keys are legal.
 
-      Keys owned by a dedicated option above are rejected here. Unset options
-      are omitted so that {file}`<setupPackage>/<instrument>/nicos.conf` can
-      still supply them -- except `logging_path`, `pid_path` and `services`,
-      which are always written.
+      Keys owned by a dedicated option above are rejected here. Options left
+      at `null` are omitted so that
+      {file}`<setupPackage>/<instrument>/nicos.conf` can still supply them.
+      `logging_path`, `pid_path`, `services`, `user`, `group`, `umask` and
+      `keystorepaths` have defaults and are therefore always written.
     '';
   };
 
@@ -530,8 +545,10 @@ in
       fail on missing optional dependencies.
 
       In `mutable` root mode the check cannot run in a derivation -- the path
-      does not exist at evaluation time -- so it becomes an `ExecStartPre`
-      instead.
+      does not exist at evaluation time -- so the `"names"` check becomes an
+      `ExecStartPre` instead. `"full"` is downgraded to that there, with a
+      warning: {command}`tools/check-setups` is never run against a mutable
+      root.
 
       `false` disables it.
     '';

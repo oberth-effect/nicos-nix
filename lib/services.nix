@@ -1,5 +1,5 @@
-# Pure helpers shared by the NixOS module, the tests and the flake's `lib`
-# output. Depends on nothing but `lib`.
+# Pure helpers shared by the NixOS module and the flake's `lib` output.
+# Depends on nothing but `lib`.
 { lib }:
 rec {
   # Exactly the directories under nicos/services/ in the NICOS source, i.e.

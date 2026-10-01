@@ -1,5 +1,5 @@
-# Phase 1 gate: every module in the NICOS core tree either imports, or fails
-# only because an optional dependency is absent.
+# Every module in the NICOS core tree either imports, or fails only because an
+# optional dependency is absent.
 {
   runCommand,
   nicos,

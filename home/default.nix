@@ -14,6 +14,7 @@
 }:
 let
   guiLib = import ../lib/gui.nix { inherit lib; };
+  fromOverlay = import ../lib/from-overlay.nix;
   cfg = config.programs.nicos-gui;
 in
 {
@@ -21,7 +22,9 @@ in
 
   config = lib.mkIf cfg.enable {
     programs.nicos-gui.finalPackage = guiLib.mkPackage {
-      inherit (pkgs) nicosLib;
+      # This module never touches nixpkgs.overlays, so the overlay is the
+      # user's job; say so instead of failing on a missing attribute.
+      nicosLib = fromOverlay pkgs "nicosLib";
       inherit cfg;
     };
 
@@ -43,6 +46,6 @@ in
     # Note: the GUI keeps its own state in ~/.config/nicos (its log,
     # style.qss, and the instrument chosen in the picker). Home Manager does
     # not manage that, and users reasonably expect it to.
-    warnings = guiLib.noTargetWarning cfg;
+    warnings = guiLib.warningsFor cfg;
   };
 }

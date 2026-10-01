@@ -41,15 +41,16 @@
     "nicos-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1788547689,
-        "narHash": "sha256-fISmLFtm5ZuTDbzuMgMLZ7NBObJ4vy/RoQxU8cFWrUQ=",
+        "lastModified": 1756307903,
+        "narHash": "sha256-JpN+luShmk8p+os3t5t9yhq2XN7Q/HUOCk8W9N+ep6Y=",
         "owner": "mlz-ictrl",
         "repo": "nicos",
-        "rev": "ce7b264b8de79f8b68241391892097a24555ee15",
+        "rev": "4d7dda42bcaf724f828fa7ff29cf1f13b9287647",
         "type": "github"
       },
       "original": {
         "owner": "mlz-ictrl",
+        "ref": "v3.12.2",
         "repo": "nicos",
         "type": "github"
       }

@@ -1,9 +1,13 @@
 # The GUI's import path, without needing a display.
 #
 # This is the regression test for the packaging-specific parts of the Qt story:
-# the QtDesigner stub, the find_library fix behind the libGL preload, GR's
-# runtime discovery, and the qtWrapperArgs splice. All of those fail at *import*
-# time, so no window is required to catch them.
+# the QtDesigner stub, the find_library fix behind the libGL preload, and GR's
+# runtime discovery. All of those fail at *import* time, so no window is
+# required to catch them.
+#
+# Not covered: the qtWrapperArgs splice (platform plugins, QML paths). It only
+# goes into the bin/nicos-gui wrapper, and this runs nicos-python, which
+# carries NICOS_LIBRARY_PATH but not the Qt environment.
 {
   runCommand,
   nicosLib,

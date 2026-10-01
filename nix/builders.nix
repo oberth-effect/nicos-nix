@@ -1,4 +1,4 @@
-# The builders: everything that produces a derivation.
+# The pkgs-bound builders: the derivations that compose a NICOS installation.
 #
 #   mkSetupPackage  a nicos_<facility> directory -> a derivation
 #   mkNicosRoot     core + setup packages + nicos.conf -> a valid NICOS root
@@ -6,10 +6,11 @@
 #   mkNicos         all of the above, wired together
 #   checkSetups     validate a composed root's setups at build time
 #
-# Everything here is pkgs-bound: it needs a package set to build anything. That
-# is what separates it from `lib/`, which holds the pure helpers that need
-# nothing but `lib` and are therefore exposed as the system-independent
-# `flake.lib`.
+# Everything here needs a package set to build anything. That is what
+# separates it from lib/services.nix, whose helpers need nothing but `lib` and
+# are therefore exposed as the system-independent `flake.lib`. (lib/gui.nix is
+# neither: it is module glue shared by the NixOS and Home Manager GUI modules,
+# takes `pkgs.nicosLib` as an argument, and is not part of flake.lib.)
 #
 # Reached as `pkgs.nicosLib` -- the attribute keeps that name deliberately,
 # even though the file is named for its contents.
@@ -81,6 +82,38 @@ let
       NICOS resolves it against nicos_root, which here is a read-only
       /nix/store path. Use an absolute path (e.g. /run/nicos, /var/log/nicos).
     '' value;
+
+  # Fail at evaluation time with a pointer to mkSetupPackage, instead of deep
+  # inside a builder with `attribute 'setupPackageName' missing`. Also rejects
+  # two packages with the same name: lndir reports "File exists" for a leaf
+  # that is already linked but still exits 0, so the two would be silently
+  # merged with the earlier one winning; in mutable mode PYTHONPATH would
+  # shadow one with the other just as silently.
+  checkSetupPackages =
+    setupPackages:
+    let
+      isSetupPackage = sp: lib.isAttrs sp && sp ? setupPackageName && sp ? pythonDeps;
+      bad = lib.filter (sp: !isSetupPackage sp) setupPackages;
+      describe = sp: if lib.isAttrs sp then sp.name or "<unnamed derivation>" else toString sp;
+      names = map (sp: sp.setupPackageName) setupPackages;
+      dupes = lib.unique (lib.filter (n: lib.count (m: m == n) names > 1) names);
+    in
+    lib.throwIf (bad != [ ])
+      ''
+        nicos-nix: setupPackages contains ${lib.concatMapStringsSep ", " describe bad},
+        which was not built with pkgs.nicosLib.mkSetupPackage (no
+        passthru.setupPackageName). Wrap it:
+          pkgs.nicosLib.mkSetupPackage { name = "nicos_<facility>"; src = <that>; }
+      ''
+      (
+        lib.throwIf (dupes != [ ]) ''
+          nicos-nix: setupPackages contains more than one package named
+          ${lib.concatStringsSep ", " dupes}. They would be merged into one
+          directory, with the earlier one's files winning on conflict. Keep
+          only the one you mean (the vendored pkgs.nicosSetupPackages.<x> or
+          your own).
+        '' setupPackages
+      );
 in
 rec {
 
@@ -164,6 +197,7 @@ rec {
       inherit (nicos.passthru) dependencies optional-dependencies;
       known = lib.attrNames optional-dependencies;
       unknown = lib.subtractLists known extras;
+      sps = checkSetupPackages setupPackages;
     in
     lib.throwIf (unknown != [ ])
       ''
@@ -175,7 +209,7 @@ rec {
           ps:
           dependencies
           ++ lib.concatLists (lib.attrVals extras optional-dependencies)
-          ++ lib.concatMap (sp: sp.pythonDeps ps) setupPackages
+          ++ lib.concatMap (sp: sp.pythonDeps ps) sps
           ++ extraPythonPackages ps
           ++ [ nicosSitecustomize ]
         )
@@ -193,6 +227,18 @@ rec {
         passthru = { inherit pythonEnv; };
       }
       ''
+        # A `nicos` in site-packages would silently relocate nicos_root to the
+        # env, where there is no nicos.conf -- a working-looking NICOS aimed at
+        # the wrong facility. Checked here rather than in mkNicosRoot because
+        # every mode builds the shim, while mutable mode never builds a root.
+        if [ -e "${pythonEnv}/${python.sitePackages}/nicos/configmod.py" ]; then
+          echo "nicos-nix: the composed interpreter env contains a 'nicos'" >&2
+          echo "  package in site-packages; nicos_root would be ambiguous." >&2
+          echo "  Remove it from extraPythonPackages (or the setup package's" >&2
+          echo "  pythonDeps); the NICOS core comes from the root, not the env." >&2
+          exit 1
+        fi
+
         mkdir -p $out/bin
         makeBinaryWrapper ${pythonEnv}/bin/python3 $out/bin/python3 \
           --set PYTHONNOUSERSITE 1
@@ -227,13 +273,17 @@ rec {
       setupPackages ? [ ],
       settings ? { },
       environment ? { },
+      # The nicos.conf to install. mkNicos passes the one it also exposes as
+      # passthru.nicosConf, so the root's copy and the one a mutable checkout
+      # gets symlinked are the same file by construction.
+      nicosConf ? mkNicosConf { inherit settings environment; },
       pythonShim,
     }:
     let
-      nicosConf = mkNicosConf { inherit settings environment; };
+      sps = checkSetupPackages setupPackages;
       # The nicos_root self-test needs an importable setup package, because
       # nicos/_vendor/gitversion.py calls config.apply() at import time.
-      canSelfTest = setupPackages != [ ] && (settings.setup_package or null) != null;
+      canSelfTest = sps != [ ] && (settings.setup_package or null) != null;
     in
     stdenvNoCC.mkDerivation {
       pname = "${pname}-root";
@@ -255,7 +305,7 @@ rec {
         # Python 3.13 (recurse_symlinks defaults to False), so the GUI's
         # instrument picker would silently find nothing.
         lndir -silent ${nicos} "$out"
-        ${lib.concatMapStringsSep "\n" (sp: ''lndir -silent ${sp} "$out"'') setupPackages}
+        ${lib.concatMapStringsSep "\n" (sp: ''lndir -silent ${sp} "$out"'') sps}
 
         # bin/ must be REAL files, for two independent reasons:
         #  * nicos_root is derived from realpath(__file__) of the script;
@@ -277,10 +327,21 @@ rec {
         install -m444 ${nicosConf} "$out/nicos.conf"
 
         ##################### postconditions #####################
-        test -f "$out/nicos/configmod.py"
-        test -f "$out/nicos/RELEASE-VERSION"
-        test -d "$out/template"
-        test -d "$out/nicostools"
+        for f in nicos/configmod.py nicos/RELEASE-VERSION; do
+          if [ ! -f "$out/$f" ]; then
+            echo "nicos-nix: the composed root lacks '$f'; the NICOS source" >&2
+            echo "  tree in ${nicos} does not look like a NICOS checkout." >&2
+            exit 1
+          fi
+        done
+        for d in template nicostools; do
+          if [ ! -d "$out/$d" ]; then
+            echo "nicos-nix: the composed root lacks the '$d/' directory;" >&2
+            echo "  upstream moved it, so pkgs/nicos/unwrapped.nix and this" >&2
+            echo "  check need updating together." >&2
+            exit 1
+          fi
+        done
         # Every executable we generate a wrapper for must exist, and the source
         # tree must ship nothing we would silently drop.
         expected=$(for b in ${lib.escapeShellArgs nicosBinNames}; do echo "$b"; done | sort)
@@ -293,18 +354,12 @@ rec {
           comm -13 <(echo "$expected") <(echo "$actual") | sed 's/^/    /' >&2
           exit 1
         fi
-        ${lib.concatMapStringsSep "\n" (
-          sp: ''test -f "$out/${sp.setupPackageName}/__init__.py"''
-        ) setupPackages}
-
-        # A `nicos` in site-packages would silently relocate nicos_root to the
-        # env, where there is no nicos.conf -- a working-looking NICOS aimed at
-        # the wrong facility.
-        if [ -e "${pythonShim.pythonEnv}/${python.sitePackages}/nicos/configmod.py" ]; then
-          echo "nicos-nix: the composed interpreter env contains a 'nicos'" >&2
-          echo "  package in site-packages; nicos_root would be ambiguous." >&2
-          exit 1
-        fi
+        ${lib.concatMapStringsSep "\n" (sp: ''
+          if [ ! -f "$out/${sp.setupPackageName}/__init__.py" ]; then
+            echo "nicos-nix: setup package ${sp.setupPackageName} did not land in the root." >&2
+            exit 1
+          fi
+        '') sps}
       ''
       + lib.optionalString canSelfTest ''
         # The assertion that actually proves the architecture works.
@@ -317,7 +372,10 @@ rec {
         echo "nicos-nix: verified config.nicos_root == $out"
       '';
 
-      passthru = { inherit pythonShim setupPackages; };
+      passthru = {
+        inherit pythonShim nicosConf;
+        setupPackages = sps;
+      };
 
       meta = {
         description = "NICOS root (${pname})";
@@ -544,6 +602,13 @@ rec {
         else
           environment;
 
+      # Built once and shared: the store root installs it, and passthru exposes
+      # it so a mutable checkout can symlink the very same file.
+      nicosConf = mkNicosConf {
+        inherit settings;
+        environment = environment';
+      };
+
       storeRoot = mkNicosRoot {
         inherit
           pname
@@ -551,6 +616,7 @@ rec {
           setupPackages
           settings
           pythonShim
+          nicosConf
           ;
         environment = environment';
       };
@@ -577,14 +643,15 @@ rec {
         }).overrideAttrs
           (old: {
             passthru = (old.passthru or { }) // {
-              inherit pythonEnv pythonShim setupPackages;
+              inherit
+                pythonEnv
+                pythonShim
+                setupPackages
+                nicosConf
+                ;
               # so checkSetups can build a Qt-capable env from the same source
               nicosUnwrapped = nicos;
               root = if mutableMode then toString rootPath else storeRoot;
-              nicosConf = mkNicosConf {
-                inherit settings;
-                environment = environment';
-              };
             };
           })
       );

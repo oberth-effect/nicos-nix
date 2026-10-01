@@ -3,9 +3,23 @@
 # NICOS's setup.py declares no `install_requires` at all, so this table is
 # transcribed from requirements*.txt. Keeping it in one file means a nixpkgs
 # rename has a blast radius of one edit.
-{ python }:
+#
+# The table is nearly stable across the versions a deployment may pin (3.12.2
+# and the 2026 master differ in three lines), so the few version-dependent
+# entries are decided by looking at the pinned tree's own requirements.txt
+# rather than by a version comparison, which a dated snapshot would defeat.
+{
+  lib,
+  python,
+  src,
+}:
 let
   ps = python.pkgs;
+  requirements = builtins.readFile "${src}/requirements.txt";
+  asksFor = name: lib.hasInfix name requirements;
+
+  # nicos/configmod.py switched from `toml` to `tomlkit` after 3.12.
+  tomlReader = if asksFor "tomlkit" then ps.tomlkit else ps.toml;
 in
 {
   # requirements.txt, plus systemd-python.
@@ -21,7 +35,7 @@ in
     ps.ldap3
     ps.psutil
     ps.html2text
-    ps.tomlkit
+    tomlReader
     ps.lttb # ours
     ps.nicos-pyctl # ours
     ps.systemd-python
@@ -68,6 +82,6 @@ in
     # own lifecycle, not this module's business.
     secop = [ ps.frappy-core ];
     # epics                          # deferred: needs EPICS base C libraries,
-    #                                # which nixpkgs also lacks. See the plan.
+    #                                # which nixpkgs also lacks. See README, "Status".
   };
 }

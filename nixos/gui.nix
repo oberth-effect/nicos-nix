@@ -14,6 +14,7 @@
 }:
 let
   guiLib = import ../lib/gui.nix { inherit lib; };
+  fromOverlay = import ../lib/from-overlay.nix;
   cfg = config.programs.nicos-gui;
 in
 {
@@ -21,7 +22,7 @@ in
 
   config = lib.mkIf cfg.enable {
     programs.nicos-gui.finalPackage = guiLib.mkPackage {
-      inherit (pkgs) nicosLib;
+      nicosLib = fromOverlay pkgs "nicosLib";
       inherit cfg;
     };
 
@@ -42,6 +43,6 @@ in
       }
     ) cfg.servers;
 
-    warnings = guiLib.noTargetWarning cfg;
+    warnings = guiLib.warningsFor cfg;
   };
 }

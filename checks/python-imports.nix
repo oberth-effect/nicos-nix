@@ -1,5 +1,6 @@
-# Phase 0 gate: the two new Python packages import and work on the pinned
-# interpreter, against whatever numpy nixpkgs currently ships.
+# lttb and nicos-pyctl -- the dependencies nixpkgs lacks that every NICOS
+# process imports -- work on the pinned interpreter, against whatever numpy
+# nixpkgs currently ships. gr, the other one, is covered by gui-offscreen.
 {
   runCommand,
   nicosPython,

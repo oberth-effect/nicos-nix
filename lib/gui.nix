@@ -39,6 +39,18 @@ rec {
   options = {
     enable = mkEnableOption "the NICOS Qt client";
 
+    package = mkOption {
+      type = types.nullOr types.package;
+      default = null;
+      defaultText = literalExpression "pkgs.nicos-unwrapped";
+      description = ''
+        The bare NICOS source tree to build the GUI from, the counterpart of
+        `services.nicos.package`. `null` means `pkgs.nicos-unwrapped`; a
+        machine that also runs `services.nicos` can pass
+        `config.services.nicos.package` to keep both on one revision.
+      '';
+    };
+
     setupPackages = mkOption {
       type = types.listOf types.package;
       default = [ ];
@@ -55,7 +67,12 @@ rec {
       type = types.nullOr types.str;
       default = null;
       example = "nicos_mgml";
-      description = "`setup_package`. Leave null to get the instrument chooser dialog.";
+      description = ''
+        `setup_package`. Leave null to get the instrument chooser dialog.
+        Unlike `services.nicos.setupPackage`, `null` never auto-selects a
+        single entry of {option}`programs.nicos-gui.setupPackages`: the
+        chooser is the point of a multi-instrument client.
+      '';
     };
 
     instrument = mkOption {
@@ -83,8 +100,11 @@ rec {
       type = types.nullOr types.path;
       default = null;
       description = ''
-        A {file}`guiconfig.py` passed with `-c`, bypassing
-        {option}`setupPackage`/{option}`instrument` resolution entirely.
+        A {file}`guiconfig.py` passed with `-c` to the desktop entries
+        generated from {option}`programs.nicos-gui.servers`, bypassing
+        `setupPackage`/`instrument` resolution for those. It does not reach a
+        plain `nicos-gui` run from `PATH`, which resolves through
+        `setupPackage`/`instrument` as usual.
       '';
     };
 
@@ -108,15 +128,25 @@ rec {
   # The package both modules build from their options.
   mkPackage =
     { nicosLib, cfg }:
-    nicosLib.mkNicos {
-      pname = "nicos-gui";
-      inherit (cfg) setupPackages extraPythonPackages;
-      extras = [ "gui" ] ++ cfg.extras;
-      settings =
-        lib.optionalAttrs (cfg.setupPackage != null) { setup_package = cfg.setupPackage; }
+    nicosLib.mkNicos (
+      {
+        pname = "nicos-gui";
+        inherit (cfg) setupPackages extraPythonPackages;
+        extras = [ "gui" ] ++ cfg.extras;
+        settings = {
+          # The GUI is a client and writes neither pids nor service logs (its
+          # own log goes to ~/.config/nicos/log), but left relative these would
+          # resolve against the read-only store root. The same values as the
+          # overlay's nicos-gui.
+          pid_path = "/tmp/nicos-gui/pid";
+          logging_path = "/tmp/nicos-gui/log";
+        }
+        // lib.optionalAttrs (cfg.setupPackage != null) { setup_package = cfg.setupPackage; }
         // lib.optionalAttrs (cfg.instrument != null) { instrument = cfg.instrument; };
-      mainProgram = "nicos-gui";
-    };
+        mainProgram = "nicos-gui";
+      }
+      // lib.optionalAttrs (cfg.package != null) { nicos = cfg.package; }
+    );
 
   # The command line for one server entry.
   execFor =
@@ -138,11 +168,17 @@ rec {
       ]
     );
 
-  # Fires when the GUI would open its chooser on every start.
-  noTargetWarning =
+  # Configurations that are legal but almost certainly not what was meant.
+  warningsFor =
     cfg:
-    lib.optional (cfg.servers == { } && cfg.guiConfig == null && cfg.setupPackage == null) (
-      "programs.nicos-gui: no setupPackage, guiConfig or servers configured, so the GUI "
+    # The GUI would open its chooser on every start.
+    lib.optional (cfg.servers == { } && cfg.setupPackage == null) (
+      "programs.nicos-gui: no setupPackage or servers configured, so the GUI "
       + "will open its instrument chooser on every start."
+    )
+    # guiConfig is only spliced into the desktop entries.
+    ++ lib.optional (cfg.guiConfig != null && cfg.servers == { }) (
+      "programs.nicos-gui.guiConfig only reaches the desktop entries generated from "
+      + "programs.nicos-gui.servers, which is empty, so it has no effect."
     );
 }

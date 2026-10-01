@@ -28,11 +28,26 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     # Freeze the version (see pkgs/nicos/gitversion.py for why). The greps are
     # a shape check: if upstream refactors this module the build fails loudly
     # instead of silently dropping the fix.
-    grep -q 'def get_nicos_version' nicos/_vendor/gitversion.py
-    grep -q 'config.apply()' nicos/_vendor/gitversion.py
+    for needle in 'def get_nicos_version' 'config.apply()'; do
+      if ! grep -q "$needle" nicos/_vendor/gitversion.py; then
+        echo "nicos-nix: nicos/_vendor/gitversion.py no longer contains '$needle';" >&2
+        echo "  upstream refactored it, so pkgs/nicos/gitversion.py needs updating." >&2
+        exit 1
+      fi
+    done
     cp ${./gitversion.py} nicos/_vendor/gitversion.py
     substituteInPlace nicos/_vendor/gitversion.py \
       --subst-var-by version "${finalAttrs.version}"
+
+    # NICOS 3.12 and older use numpy.mat, which NumPy 2 (what nixpkgs ships)
+    # removed; nicos.devices.tas.plotting and nicos.commands.tas then fail to
+    # import. Upstream later switched to asmatrix, the documented drop-in, so
+    # apply that wherever the pinned tree still has the old spelling.
+    if grep -qE 'from numpy import .*\bmat\b' nicos/devices/tas/plotting.py; then
+      substituteInPlace nicos/devices/tas/plotting.py \
+        --replace-fail ', mat, ' ', asmatrix, ' \
+        --replace-fail 'matrix = mat(' 'matrix = asmatrix('
+    fi
   '';
 
   installPhase = ''
@@ -82,7 +97,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
   passthru = {
     inherit python;
   }
-  // import ./dependencies.nix { inherit python; };
+  // import ./dependencies.nix { inherit lib python src; };
 
   meta = {
     description = "NICOS instrument control system (prepared source tree, not composed)";

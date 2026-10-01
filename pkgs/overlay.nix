@@ -1,25 +1,42 @@
 # The nicos-nix overlay.
 #
-# `nicos-src` is threaded in from the flake so a consumer can repoint it
-# (inputs.nicos-nix.inputs.nicos-src.url = "git+https://...") without forking
-# this repo.
-{ nicos-src }:
+# `nicos-src` is threaded in from the flake, but only as the *default*. The
+# packages read `final.nicosSource` and `final.nicosVersion`, so a later
+# overlay can pin another NICOS per package set -- and therefore per NixOS
+# host -- and the core, the vendored setup packages and the GUI all follow.
+# A consumer can also repoint the input itself:
+#   inputs.nicos-nix.inputs.nicos-src.url = "github:mlz-ictrl/nicos/v3.13.2";
+# See the README, "Pinning NICOS".
+{
+  nicos-src,
+  # The release `nicos-src` is pinned to, e.g. "3.12.2", or null for an
+  # untagged snapshot.
+  release ? null,
+}:
 final: _prev:
 let
   inherit (final) lib;
-
-  # Track the nicos-src input. Upstream's newest release is 3.13.2 and the
-  # GitHub mirror carries no tags, so the date of the pinned revision is the
-  # only honest disambiguator.
-  srcDate = nicos-src.lastModifiedDate or null;
-  dateSuffix =
-    if srcDate == null then
-      "unknown"
-    else
-      "${lib.substring 0 4 srcDate}-${lib.substring 4 2 srcDate}-${lib.substring 6 2 srcDate}";
-  version = "3.13.2-unstable-${dateSuffix}";
 in
 {
+  # The NICOS source tree everything below is built from.
+  nicosSource = nicos-src;
+
+  # The version label, also written to nicos/RELEASE-VERSION and reported by
+  # NICOS itself. A flake input records only a commit, never the tag it was
+  # reached through, so the flake states the release it pinned; without that,
+  # the pin's date is the only honest disambiguator. Set this together with
+  # nicosSource when pinning something else, or the label goes stale.
+  nicosVersion =
+    let
+      d = final.nicosSource.lastModifiedDate or null;
+      date =
+        if d == null then
+          "unknown"
+        else
+          "${lib.substring 0 4 d}-${lib.substring 4 2 d}-${lib.substring 6 2 d}";
+    in
+    if release != null then release else "0-unstable-${date}";
+
   # The pinned interpreter, carrying the Python packages nixpkgs lacks.
   # See nix/python.nix for why this is `.override` and not an overlay of python3.
   nicosPython = import ../nix/python.nix { pkgs = final; };
@@ -48,13 +65,13 @@ in
 
   nicos-unwrapped = final.callPackage ../pkgs/nicos/unwrapped.nix {
     python = final.nicosPython;
-    src = nicos-src;
-    inherit version;
+    src = final.nicosSource;
+    version = final.nicosVersion;
   };
 
   # The pkgs-bound builders (mkSetupPackage, mkNicos, checkSetups, ...). The
-  # pure helpers live in lib/ and are exposed as flake.lib instead, since they
-  # need no package set.
+  # helpers in lib/services.nix need no package set and are exposed as
+  # flake.lib instead.
   nicosLib = final.callPackage ../nix/builders.nix {
     python = final.nicosPython;
   };
@@ -65,8 +82,8 @@ in
   # handed to things expecting only derivations.
   nicosSetupPackages = import ../pkgs/setup-packages.nix {
     inherit (final) lib nicosLib;
-    src = nicos-src;
-    inherit version;
+    src = final.nicosSource;
+    version = final.nicosVersion;
   };
 
   # The stock nicos_demo setups write to paths relative to nicos_root
@@ -81,8 +98,13 @@ in
   nicosDemoRebased = final.nicosSetupPackages.demo.overrideAttrs (_: {
     # '#' is the sed delimiter here so that '|' stays ERE alternation.
     postPatch = ''
-      grep -rlE "=[[:space:]]*'data(/|')" --include='*.py' nicos_demo/demo \
-        | xargs -r sed -i -E "s#=[[:space:]]*'data(/|')#= '/tmp/nicos-demo/data\1#g"
+      files=$(grep -rlE "=[[:space:]]*'data(/|')" --include='*.py' nicos_demo/demo || true)
+      if [ -z "$files" ]; then
+        echo "nicos-nix: nicos_demo no longer uses relative 'data' paths;" >&2
+        echo "  drop nicosDemoRebased's postPatch in pkgs/overlay.nix." >&2
+        exit 1
+      fi
+      echo "$files" | xargs sed -i -E "s#=[[:space:]]*'data(/|')#= '/tmp/nicos-demo/data\1#g"
     '';
   });
 

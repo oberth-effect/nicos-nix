@@ -44,9 +44,15 @@ KNOWN_UNAVAILABLE = {
 optional = {}
 known = {}
 hard = []
+classified = set()
 
 
 def classify(name, exc):
+    # walk_packages' onerror fires for a package that fails to import, and the
+    # loop below then tries the same name again: count it once.
+    if name in classified:
+        return
+    classified.add(name)
     for prefix, reason in KNOWN_UNAVAILABLE.items():
         if name == prefix or name.startswith(prefix + "."):
             known.setdefault(prefix, []).append(name)

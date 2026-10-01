@@ -11,6 +11,10 @@
 }:
 let
   nlib = import ../lib/services.nix { inherit lib; };
+  fromOverlay = import ../lib/from-overlay.nix;
+  # nixosModules.nicos does not apply the overlay (its consumers set
+  # nixpkgs.pkgs themselves), so a missing one must be diagnosed, not just fail.
+  nicosLib = fromOverlay pkgs "nicosLib";
 
   inherit (lib)
     optional
@@ -45,6 +49,9 @@ let
       pkgs.nicosLib.mkSetupPackage.
     '');
   setupPackageNames = map setupPackageNameOf cfg.setupPackages;
+  duplicateSetupPackageNames = lib.unique (
+    lib.filter (n: lib.count (m: m == n) setupPackageNames > 1) setupPackageNames
+  );
 
   effectiveSetupPackage =
     if cfg.setupPackage != null then
@@ -97,23 +104,26 @@ let
 
   # Directories the user wants importable without a rebuild. mkNicos adds the
   # *Nix-built* setup packages to PYTHONPATH itself when the root is mutable,
-  # so only these plain paths belong here.
+  # so only these plain paths belong here. A hand-set environment.PYTHONPATH
+  # is appended rather than silently replacing them.
+  pythonPath =
+    cfg.mutableSetupPackages ++ optional (cfg.environment ? PYTHONPATH) cfg.environment.PYTHONPATH;
   nicosEnvironment = {
     NICOS_DATA_ROOT = toString cfg.dataDir;
   }
-  // optionalAttrs (cfg.mutableSetupPackages != [ ]) {
-    PYTHONPATH = concatStringsSep ":" cfg.mutableSetupPackages;
-  }
-  // cfg.environment;
+  // cfg.environment
+  // optionalAttrs (pythonPath != [ ]) {
+    PYTHONPATH = concatStringsSep ":" pythonPath;
+  };
 
   # The special setups the `services` list implies. A bare name loads
   # setups/special/<proc>.py; a `<proc>-<inst>` name loads
   # setups/special/<proc>-<inst>.py.
   impliedSetups = lib.unique (
-    lib.mapAttrsToList (sname: s: if s.setup != null then s.setup else s.procName) enabledServices
+    lib.mapAttrsToList (_: s: if s.setup != null then s.setup else s.procName) enabledServices
   );
 
-  nicosUnchecked = pkgs.nicosLib.mkNicos {
+  nicosUnchecked = nicosLib.mkNicos {
     nicos = cfg.package;
     inherit (cfg) setupPackages;
     inherit (cfg) extras extraPythonPackages extraWrapperEnv;
@@ -217,7 +227,7 @@ let
     if cfg.checkSetups == false || mutable then
       null
     else
-      pkgs.nicosLib.checkSetups {
+      nicosLib.checkSetups {
         nicos = nicosUnchecked;
         setupNames = impliedSetups;
         level = cfg.checkSetups;
@@ -226,17 +236,17 @@ let
   # In mutable mode the check cannot be a derivation -- the path does not exist
   # at evaluation time -- so it runs before each start. A store script, not an
   # inline ExecStartPre: systemd will not parse a multi-line command value.
+  # Only the "names" level exists here; "full" is downgraded to it (warned
+  # about below), since tools/check-setups would need Qt in the runtime closure.
   mutableSetupCheckScript = pkgs.writeShellScript "nicos-check-setup-exists" ''
     set -eu
     ${nicosUnchecked}/bin/nicos-python ${./check-setup-exists.py} "$1"
   '';
 
-  # Make the package the services reference depend on the check, so a broken
-  # setup fails the build rather than the instrument. A symlink keeps the
-  # runtime closure identical.
   # `nicos` is what the units, systemPackages and finalPackage all reference,
-  # so making it depend on the check is what actually gates the build. The
-  # symlink keeps the runtime closure identical to nicosUnchecked.
+  # so making it depend on the check is what actually gates the build: a broken
+  # setup fails the build rather than the instrument. The symlink keeps the
+  # runtime closure identical to nicosUnchecked.
   nicos =
     if setupCheck == null then
       nicosUnchecked
@@ -313,6 +323,14 @@ in
           inherit path;
           inherit (d) mode;
         }) cfg.extraDirectories
+        # The keystores, owned by the service user: `nicos-keystore add` run
+        # as that user has to create its keyring file in there, and the
+        # keyrings.alt backend makedirs() the directory, which under a root-
+        # owned /etc/nicos would fail.
+        ++ map (path: {
+          inherit path;
+          mode = "0750";
+        }) cfg.keystorePaths
       )
       // {
         "/etc/nicos".d = {
@@ -363,7 +381,9 @@ in
 
   assertions = [
     {
-      assertion = enabledServices == { } || cfg.instrument != null || cfg.settings ? instrument;
+      # (`settings.instrument` is not an alternative: it is an owned key and
+      # rejected below.)
+      assertion = enabledServices == { } || cfg.instrument != null;
       message = "services.nicos.instrument must be set: it selects the setup subdirectory and the guiconfig.py location.";
     }
     {
@@ -383,21 +403,14 @@ in
       '';
     }
     {
-      assertion = lib.length (lib.unique setupPackageNames) == lib.length setupPackageNames;
-      message = "services.nicos.setupPackages contains two packages with the same setupPackageName.";
-    }
-    {
-      assertion = lib.all (p: lib.hasPrefix "/" (toString p)) [
-        cfg.logDir
-        cfg.pidDir
-        cfg.dataDir
-      ];
+      assertion = duplicateSetupPackageNames == [ ];
       message = ''
-        services.nicos.{logDir,pidDir,dataDir} must be absolute: NICOS resolves
-        relative paths against nicos_root, which in store mode is a read-only
-        /nix/store path.
+        services.nicos.setupPackages contains more than one package named
+        ${concatStringsSep ", " duplicateSetupPackageNames}.
       '';
     }
+    # logDir, pidDir, dataDir and root.path are types.path, which already
+    # refuses a relative value at type-check time, so no assertion for that.
     {
       assertion = conflictingKeys == [ ];
       message = ''
@@ -417,10 +430,6 @@ in
     {
       assertion = !mutable || cfg.root.path != null;
       message = "services.nicos.root.path must be set when services.nicos.root.mode = \"mutable\".";
-    }
-    {
-      assertion = cfg.root.path == null || lib.hasPrefix "/" (toString cfg.root.path);
-      message = "services.nicos.root.path must be absolute.";
     }
   ];
 
@@ -458,7 +467,13 @@ in
     ++ optional (cfg.environment ? PYTHONPATH) (
       "services.nicos.environment.PYTHONPATH is set by hand. NICOS prepends it to sys.path, "
       + "so it shadows the Nix-built NICOS and setup packages with whatever is at that path. "
-      + "Use services.nicos.mutableSetupPackages instead."
+      + "Prefer services.nicos.mutableSetupPackages; when both are set, those come first."
+    )
+
+    ++ optional (mutable && cfg.checkSetups == "full") (
+      "services.nicos.checkSetups = \"full\" is downgraded to \"names\" in mutable root mode: "
+      + "the pre-start check only verifies that the special setups exist, because "
+      + "tools/check-setups cannot run against a root that does not exist at build time."
     )
 
     ++ optional mutable (

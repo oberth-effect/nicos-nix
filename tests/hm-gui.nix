@@ -39,13 +39,13 @@ let
   gui = hm.config.programs.nicos-gui.finalPackage;
   entries = lib.attrNames hm.config.xdg.desktopEntries;
 in
-assert lib.assertMsg (lib.hasInfix "nicos-gui" gui.name) "finalPackage is ${gui.name}";
+assert lib.assertMsg (lib.hasInfix "nicos-gui" gui.name) "nicos-nix: finalPackage is ${gui.name}";
 assert lib.assertMsg (
   entries == [ "nicos-gui-demo" ]
-) "expected one desktop entry named nicos-gui-demo, got ${toString entries}";
+) "nicos-nix: expected one desktop entry named nicos-gui-demo, got ${toString entries}";
 # Force the whole activation package, so a mistake anywhere in the module is an
 # evaluation error here rather than a surprise on the user's next switch.
-assert lib.assertMsg (hm.activationPackage != null) "no activation package";
+assert lib.assertMsg (hm.activationPackage != null) "nicos-nix: no activation package";
 runCommand "nicos-hm-gui" { } ''
   echo "finalPackage    : ${gui.name}" > $out
   echo "desktop entries : ${toString entries}" >> $out

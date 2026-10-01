@@ -10,8 +10,11 @@
       url = "github:nix-community/home-manager";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    # The default NICOS: a release tag, so that `nix flake update` does not
+    # silently move to master. Keep `release` in flake outputs in step with it.
+    # Deployments pin their own; see the README, "Pinning NICOS".
     nicos-src = {
-      url = "github:mlz-ictrl/nicos";
+      url = "github:mlz-ictrl/nicos/v3.12.2";
       flake = false;
     };
   };
@@ -32,7 +35,10 @@
       ];
 
       flake = {
-        overlays.default = import ./pkgs/overlay.nix { inherit nicos-src; };
+        overlays.default = import ./pkgs/overlay.nix {
+          inherit nicos-src;
+          release = "3.12.2"; # the tag inputs.nicos-src points at
+        };
 
         # Overlay-free, for consumers who set nixpkgs.pkgs externally (a
         # module touching nixpkgs.overlays would be an eval error for them).
@@ -84,16 +90,27 @@
             frappy-core = pkgs.nicosPython.pkgs.frappy-core;
           };
 
-          apps = {
-            # `nix run` with no attribute: the GUI is the thing a person
-            # actually wants to run interactively.
-            default.program = "${pkgs.nicos-gui}/bin/nicos-gui";
-            nicos-gui.program = "${pkgs.nicos-gui}/bin/nicos-gui";
-            # The text client, for talking to an existing daemon.
-            nicos-client.program = "${pkgs.nicos}/bin/nicos-client";
-            # A single-process demo instrument: no cache or daemon needed.
-            demo.program = "${pkgs.nicos}/bin/nicos-aio";
-          };
+          apps =
+            let
+              gui = {
+                program = "${pkgs.nicos-gui}/bin/nicos-gui";
+                meta.description = "The NICOS Qt client, with every vendored setup package";
+              };
+            in
+            {
+              # `nix run` with no attribute: the GUI is the thing a person
+              # actually wants to run interactively.
+              default = gui;
+              nicos-gui = gui;
+              nicos-client = {
+                program = "${pkgs.nicos}/bin/nicos-client";
+                meta.description = "The NICOS text client, for talking to an existing daemon";
+              };
+              demo = {
+                program = "${pkgs.nicos}/bin/nicos-aio";
+                meta.description = "nicos-aio: a whole demo instrument in one process, no cache or daemon needed";
+              };
+            };
 
           checks = {
             python-imports = pkgs.callPackage ./checks/python-imports.nix { };
@@ -123,13 +140,19 @@
               pkgs.nicos.passthru.pythonEnv
               pkgs.nixfmt
             ];
+            # What the bin/nicos-* wrappers set: without it the find_library
+            # fix in nix/nicos_nix_fixes.py has nowhere to look, and a
+            # checkout's ./bin/nicos-client dies on readline at import.
+            NICOS_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.readline ];
             shellHook = ''
               echo "nicos-nix dev shell -- $(python3 --version 2>&1)"
               echo "a NICOS checkout's ./bin/nicos-aio will use this interpreter"
             '';
           };
 
-          formatter = pkgs.nixfmt;
+          # nixfmt-tree: `nix fmt` with no arguments formats the whole tree; plain
+          # nixfmt warns that being handed a directory is deprecated.
+          formatter = pkgs.nixfmt-tree;
         };
     };
 }

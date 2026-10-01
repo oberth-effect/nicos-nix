@@ -68,14 +68,10 @@ let
 
   assertionsFail = modules: nicosFailures (mkSystem modules) != [ ];
 
-  # A type error is a hard eval failure.
+  # A hard eval failure -- a type error, an enum violation, a throw -- while
+  # forcing whatever `force` picks out of the evaluated config.
   throwsOnEval =
-    modules:
-    !(builtins.tryEval (
-      # attrNames alone does not force the submodule, so the `procName` enum
-      # would never be checked; mapping over it does.
-      builtins.deepSeq (lib.mapAttrs (_: sv: sv.procName) (mkSystem modules).services.nicos.services) true
-    )).success;
+    force: modules: !(builtins.tryEval (builtins.deepSeq (force (mkSystem modules)) true)).success;
 
   checks = {
     # `monitor-html` is not a binary: it is nicos-monitor with -S monitor-html.
@@ -130,18 +126,30 @@ let
       base
       { services.nicos.settings.services_myhost = [ "cache" ]; }
     ];
-    rejects-relative-logdir = assertionsFail [
+    # Keys the dedicated options own are refused from `settings`.
+    rejects-owned-key-in-settings = assertionsFail [
       base
       { services.nicos.settings.logging_path = "log"; }
+    ];
+    # types.path refuses a relative value by itself, so this is a type error,
+    # not one of the module's assertions.
+    rejects-relative-logdir = throwsOnEval (c: c.services.nicos.logDir) [
+      base
+      { services.nicos.logDir = "log"; }
     ];
     rejects-mutable-without-path = assertionsFail [
       base
       { services.nicos.root.mode = "mutable"; }
     ];
-    rejects-unknown-service = throwsOnEval [
-      base
-      { services.nicos.services = [ "pollr" ]; }
-    ];
+    rejects-unknown-service =
+      throwsOnEval
+        # attrNames alone does not force the submodule, so the `procName` enum
+        # would never be checked; mapping over it does.
+        (c: lib.mapAttrs (_: sv: sv.procName) c.services.nicos.services)
+        [
+          base
+          { services.nicos.services = [ "pollr" ]; }
+        ];
   };
 
   failed = lib.attrNames (lib.filterAttrs (_: v: !v) checks);

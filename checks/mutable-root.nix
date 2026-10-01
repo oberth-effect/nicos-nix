@@ -5,7 +5,6 @@
 # path resolution in the wrappers, which needs no systemd. The sandbox's /tmp is
 # a writable tmpfs, so it stands in for the checkout.
 {
-  lib,
   runCommand,
   nicosLib,
   nicos-unwrapped,
@@ -52,7 +51,7 @@ runCommand "nicos-mutable-root" { } ''
   echo "=== nicos_root must be the checkout, not a store path"
   got=$(${mutable}/bin/nicos-python -c 'from nicos import config; print(config.nicos_root)')
   echo "    nicos_root = $got"
-  test "$got" = "${rootPath}" || { echo "expected ${rootPath}" >&2; exit 1; }
+  test "$got" = "${rootPath}" || { echo "nicos-nix: expected nicos_root ${rootPath}, got $got" >&2; exit 1; }
 
   echo "=== the setup package resolves through [environment] PYTHONPATH"
   ${mutable}/bin/nicos-python -c '
@@ -71,12 +70,12 @@ runCommand "nicos-mutable-root" { } ''
   # A marker only reachable if the running code is the checkout.
   echo 'NICOS_NIX_MUTABLE_MARKER = 42' >> ${rootPath}/nicos/configmod.py
   v=$(${mutable}/bin/nicos-python -c 'import nicos.configmod as c; print(c.NICOS_NIX_MUTABLE_MARKER)')
-  test "$v" = "42" || { echo "edit did not take effect (got '$v')" >&2; exit 1; }
+  test "$v" = "42" || { echo "nicos-nix: edit did not take effect (got '$v')" >&2; exit 1; }
   echo "    marker read back: $v"
 
   echo "=== the respawn targets exist in the checkout's bin/"
   for b in nicos-poller nicos-simulate nicos-script; do
-    test -x ${rootPath}/bin/$b || { echo "missing ${rootPath}/bin/$b" >&2; exit 1; }
+    test -x ${rootPath}/bin/$b || { echo "nicos-nix: missing ${rootPath}/bin/$b" >&2; exit 1; }
   done
 
   echo "MUTABLE ROOT OK"

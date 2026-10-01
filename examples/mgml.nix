@@ -12,6 +12,11 @@
 #
 # The PYTHONPATH line is what this flake replaces: instead of pointing NICOS at
 # a checkout by hand, the setup package becomes a flake input.
+#
+# `inputs` reaches this module through `specialArgs = { inherit inputs; }` on
+# the nixosSystem call (see the README). The input is the lab's private
+# nicos_mgml tree, whose instrument directories (20t, troja) differ from the
+# vendored pkgs.nicosSetupPackages.mgml (twenty, troja).
 {
   config,
   pkgs,
@@ -50,6 +55,7 @@
     # daemon.py uses the OAuth2 authenticator against user.mgml.eu.
     extras = [
       "tango"
+      "secop"
       "notify"
       "keyring"
     ];
@@ -96,5 +102,5 @@
   #       add oauth2server --storagepw <pw> --password <secret>
   #
   # services.nicos.keystorePaths defaults to [ "/etc/nicos/keystore" ], which
-  # this module creates as root:mgml 0750.
+  # the module creates as mgml:mgml 0750, so the command above can write there.
 }
